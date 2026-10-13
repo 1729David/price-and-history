@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Price &amp; History</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <h1>Price &amp; History</h1>
+    <p>Pull market indicators and stock prices, keep them on disk, look back any time.</p>
+  </header>
+
+  <main class="layout">
+    <aside class="controls">
+      <section class="panel">
+        <h2>Date range</h2>
+        <div class="field-row">
+          <label>From <input type="date" id="start"></label>
+          <label>To <input type="date" id="end"></label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Market indicators</h2>
+        <label for="indicator">Indicator</label>
+        <select id="indicator"></select>
+        <p class="hint" id="indicator-meta"></p>
+        <button id="fetch-indicator" class="primary">Fetch indicator</button>
+      </section>
+
+      <section class="panel">
+        <h2>Stocks</h2>
+        <form id="watchlist-form" class="inline-form" novalidate>
+          <label for="ticker-input" class="visually-hidden">Tickers</label>
+          <input id="ticker-input" placeholder="AAPL, MSFT, NVDA" autocomplete="off">
+          <button type="submit">Add</button>
+        </form>
+        <ul id="watchlist" class="chips" aria-live="polite"></ul>
+        <button id="fetch-stocks" class="primary">Fetch watchlist prices</button>
+      </section>
+
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </aside>
+
+    <section class="viewer">
+      <div class="viewer-head">
+        <div>
+          <label for="series">Stored series</label>
+          <select id="series"></select>
+        </div>
+        <div class="latest" id="latest"></div>
+      </div>
+
+      <canvas id="chart" height="360" aria-label="Closing price chart"></canvas>
+
+      <details class="stored">
+        <summary>Everything stored</summary>
+        <table>
+          <thead><tr><th>Symbol</th><th>Source</th><th class="num">Days</th><th>First</th><th>Last</th></tr></thead>
+          <tbody id="stored-body"></tbody>
+        </table>
+      </details>
+
+      <h2 class="table-title">Most recent days</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Source</th><th>Date</th><th class="num">Open</th><th class="num">High</th><th class="num">Low</th><th class="num">Close</th><th class="num">Volume</th></tr></thead>
+          <tbody id="rows-body"></tbody>
+        </table>
+      </div>
+
+      <section class="news" aria-labelledby="news-title">
+        <div class="news-head">
+          <h2 id="news-title" class="table-title">News</h2>
+          <button id="fetch-news">Fetch news</button>
+        </div>
+        <p class="hint" id="news-status" role="status" aria-live="polite"></p>
+        <div id="news-body"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

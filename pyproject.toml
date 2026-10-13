@@ -1,0 +1,20 @@
+[project]
+name = "price-and-history"
+version = "0.1.0"
+description = "Retrieve and store market indicators and daily price history for stocks you choose."
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0",
+    "pandas>=2.0",
+    "requests>=2.31",
+    "yfinance>=0.2.40",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["backend"]
