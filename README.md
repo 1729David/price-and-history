@@ -58,6 +58,9 @@ API_KEY=changeme uv run uvicorn server:get_app --factory --host 127.0.0.1 --port
 | `CUSTOM_AGENT_URL` | `http://127.0.0.1:8000` | Where the agent listens |
 | `CUSTOM_AGENT_API_KEY` | unset | Sent as `X-API-Key` |
 
+`./start.sh` starts both apps together with a shared random API key and stops both on Ctrl-C. It expects
+custom-agent at `../custom-agent` (override with `CUSTOM_AGENT_DIR`) and warns if Ollama isn't running.
+
 In the UI, pick a stored stock and press **Fetch news**. A job takes minutes; the page polls it and shows
 progress. The first poll that sees it finished copies the overview and articles into `data/prices.db`
 (`news_jobs`, `news_overviews`, `news_articles`). Articles are keyed by symbol and URL, so a repeat job
