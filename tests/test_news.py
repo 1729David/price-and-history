@@ -166,3 +166,131 @@ def test_client_sends_api_key_and_maps_errors(monkeypatch):
     assert seen["headers"] == {"X-API-Key": "secret"}
     assert seen["url"].endswith("/news/AAPL")
     assert seen["json"] == {"days": 3, "max_articles": 15, "refresh": False}
+
+
+# ---------- batch queueing, job list, per-job data ----------
+
+@pytest.fixture
+def multi_agent(monkeypatch):
+    """Agent stub that hands out a distinct job per ticker and serves whatever is in `jobs`."""
+    class Stub:
+        jobs = {}
+        rejected = set()
+
+    stub = Stub()
+
+    def start(ticker, **kwargs):
+        if ticker in stub.rejected:
+            raise agent_client.AgentError("custom-agent returned 422: invalid ticker")
+        job = make_job("queued", job_id=f"job-{ticker}")
+        stub.jobs[job["id"]] = job
+        return {"id": job["id"], "status": "queued"}
+
+    monkeypatch.setattr(agent_client, "start_news_job", start)
+    monkeypatch.setattr(agent_client, "get_job", lambda job_id: stub.jobs[job_id])
+    return stub
+
+
+def finish(stub, ticker, **kwargs):
+    stub.jobs[f"job-{ticker}"] = make_job("done", job_id=f"job-{ticker}", **kwargs)
+
+
+def test_batch_queues_one_job_per_distinct_ticker(client, multi_agent):
+    resp = client.post("/api/news", json={"symbols": "aapl, MSFT;aapl  nvda"})
+    assert resp.status_code == 202
+    results = resp.get_json()["results"]
+    assert [(r["symbol"], r["job_id"], r["ok"]) for r in results] == [
+        ("AAPL", "job-AAPL", True), ("MSFT", "job-MSFT", True), ("NVDA", "job-NVDA", True)]
+    assert {j["symbol"] for j in storage.list_news_jobs()} == {"AAPL", "MSFT", "NVDA"}
+
+
+def test_batch_reports_a_rejected_ticker_without_failing_the_rest(client, multi_agent):
+    multi_agent.rejected.add("^GSPC")
+    results = client.post("/api/news", json={"symbols": ["AAPL", "^GSPC"]}).get_json()["results"]
+    assert [r["ok"] for r in results] == [True, False]
+    assert "422" in results[1]["error"]
+    assert [j["symbol"] for j in storage.list_news_jobs()] == ["AAPL"]
+
+
+def test_batch_validates_input(client, multi_agent):
+    assert client.post("/api/news", json={"symbols": "  "}).status_code == 400
+    assert client.post("/api/news", json={"symbols": "AAPL, bad!"}).status_code == 400
+    too_many = ",".join(f"T{i}" for i in range(21))
+    assert client.post("/api/news", json={"symbols": too_many}).status_code == 400
+    assert storage.list_news_jobs() == []  # a bad ticker anywhere queues nothing
+
+
+def test_job_list_shows_status_progress_and_article_counts(client, multi_agent):
+    client.post("/api/news", json={"symbols": "AAPL, MSFT"})
+    finish(multi_agent, "AAPL")
+    multi_agent.jobs["job-MSFT"] = make_job("running", job_id="job-MSFT")
+
+    jobs = {j["symbol"]: j for j in client.get("/api/news/jobs").get_json()}
+    assert jobs["AAPL"]["status"] == "done" and jobs["AAPL"]["article_count"] == 1
+    assert jobs["MSFT"]["status"] == "running" and jobs["MSFT"]["article_count"] is None
+    assert jobs["MSFT"]["progress"]["stage"] == "running"
+    # Once stored, a job is no longer asked about, so a later listing has no progress for it.
+    again = {j["symbol"]: j for j in client.get("/api/news/jobs").get_json()}
+    assert again["AAPL"]["progress"] is None
+
+
+def test_job_list_is_newest_first_and_survives_an_offline_agent(client, multi_agent, monkeypatch):
+    client.post("/api/news", json={"symbols": "AAPL, MSFT"})
+
+    def down(job_id):
+        raise agent_client.AgentError("down")
+
+    monkeypatch.setattr(agent_client, "get_job", down)
+    resp = client.get("/api/news/jobs")
+    assert resp.status_code == 200
+    assert [j["symbol"] for j in resp.get_json()] == ["MSFT", "AAPL"]
+
+
+def test_job_result_returns_everything_the_job_retrieved(client, multi_agent):
+    client.post("/api/news", json={"symbols": "AAPL"})
+    finish(multi_agent, "AAPL")
+    multi_agent.jobs["job-AAPL"]["result"]["skipped"] = [{"url": "https://example.com/x", "reason": "not relevant"}]
+    client.get("/api/news/jobs")  # stores it
+
+    body = client.get("/api/news/jobs/job-AAPL/result").get_json()
+    assert body["symbol"] == "AAPL" and body["overview"] == "Apple had a quiet month."
+    assert [a["title"] for a in body["articles"]] == ["iPhone sales"]
+    assert body["skipped"][0]["reason"] == "not relevant"
+
+
+def test_job_result_keeps_each_jobs_own_articles(client, multi_agent):
+    """A later job re-fetching the same URL must not rewrite what the earlier job retrieved."""
+    client.post("/api/news", json={"symbols": "AAPL"})
+    finish(multi_agent, "AAPL")
+    client.get("/api/news/jobs")
+
+    multi_agent.jobs["job-AAPL2"] = make_job("done", job_id="job-AAPL2", articles=[{
+        "article_id": 1, "title": "iPhone sales", "url": "https://example.com/a", "summary": "Newer summary."}])
+    storage.record_news_job("job-AAPL2", "AAPL", "queued")
+    client.get("/api/news/jobs")
+
+    first = client.get("/api/news/jobs/job-AAPL/result").get_json()
+    assert first["articles"][0]["summary"] == "Sales rose."
+    second = client.get("/api/news/jobs/job-AAPL2/result").get_json()
+    assert second["articles"][0]["summary"] == "Newer summary."
+
+
+def test_job_result_for_unfinished_or_unknown_job(client, multi_agent):
+    client.post("/api/news", json={"symbols": "AAPL"})
+    assert client.get("/api/news/jobs/job-AAPL/result").status_code == 409
+    assert client.get("/api/news/jobs/nope/result").status_code == 404
+
+
+def test_job_stored_before_snapshots_existed_is_recovered_from_the_agent(client, multi_agent):
+    client.post("/api/news", json={"symbols": "AAPL"})
+    finish(multi_agent, "AAPL")
+    client.get("/api/news/jobs")
+    with storage.connect() as conn:
+        conn.execute("DELETE FROM news_job_results")  # as if stored by the earlier version
+
+    listed = client.get("/api/news/jobs").get_json()[0]
+    assert listed["article_count"] == 1  # counted from the article rows
+
+    body = client.get("/api/news/jobs/job-AAPL/result").get_json()
+    assert body["overview"] == "Apple had a quiet month."
+    assert storage.get_job_result("job-AAPL") is not None  # saved for next time

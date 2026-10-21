@@ -1,6 +1,7 @@
 """SQLite storage for price history and the user's stock watchlist."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import date
@@ -52,6 +53,14 @@ CREATE TABLE IF NOT EXISTS news_overviews (
     symbol       TEXT NOT NULL,
     generated_at TEXT NOT NULL,
     overview     TEXT NOT NULL
+);
+
+-- The agent's complete result for each finished job (overview, articles, skipped), as returned.
+-- news_articles below keeps only the latest version of each article per symbol, so this is
+-- what lets us show exactly what one job retrieved.
+CREATE TABLE IF NOT EXISTS news_job_results (
+    job_id      TEXT PRIMARY KEY,
+    result_json TEXT NOT NULL
 );
 
 -- One row per article per symbol. The agent reuses articles across jobs, so the same URL
@@ -266,9 +275,45 @@ def store_news_result(job_id: str, symbol: str, result: dict) -> int:
             ],
         )
         conn.execute(
+            "INSERT OR REPLACE INTO news_job_results (job_id, result_json) VALUES (?, ?)",
+            (job_id, json.dumps(result)),
+        )
+        conn.execute(
             "UPDATE news_jobs SET status = 'done', error = NULL, stored = 1 WHERE job_id = ?", (job_id,)
         )
     return len(articles)
+
+
+def save_job_result(job_id: str, result: dict) -> None:
+    """Keep the full result of a job stored before snapshots existed."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO news_job_results (job_id, result_json) VALUES (?, ?)",
+            (job_id, json.dumps(result)),
+        )
+
+
+def get_job_result(job_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT result_json FROM news_job_results WHERE job_id = ?", (job_id,)).fetchone()
+    return json.loads(row["result_json"]) if row else None
+
+
+def list_news_jobs() -> list[dict]:
+    """Every job we have queued, newest first, with how many articles a finished one kept."""
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """
+            SELECT j.job_id, j.symbol, j.status, j.error, j.requested_at, j.stored,
+                   CASE WHEN j.stored = 0 THEN NULL
+                        WHEN r.result_json IS NOT NULL
+                            THEN json_array_length(json_extract(r.result_json, '$.articles'))
+                        ELSE (SELECT COUNT(*) FROM news_articles a WHERE a.job_id = j.job_id)
+                   END AS article_count
+            FROM news_jobs j LEFT JOIN news_job_results r ON r.job_id = j.job_id
+            ORDER BY j.requested_at DESC, j.rowid DESC
+            """
+        )]
 
 
 def get_news(symbol: str) -> dict:

@@ -282,12 +282,16 @@ async function loadNews(symbol) {
   const overview = news.overview
     ? `<p class="meta">Overview generated ${esc(news.overview.generated_at)}</p><p class="news-overview">${esc(news.overview.overview)}</p>`
     : "";
-  $("news-body").innerHTML = overview + news.articles.map((a) => `
+  $("news-body").innerHTML = overview + news.articles.map(articleHtml).join("");
+}
+
+function articleHtml(a) {
+  return `
     <article class="news-article">
       <h3><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.title || a.url)}</a></h3>
       <p class="meta">${esc(a.source || "Unknown source")} · ${esc((a.published_at || a.retrieved_at || "").slice(0, 10))}</p>
       <p>${esc(a.summary)}</p>
-    </article>`).join("");
+    </article>`;
 }
 
 function describeProgress(job) {
@@ -317,6 +321,85 @@ async function fetchNews() {
   await loadNews(symbol);
 }
 
+// ---------- News jobs: queue several tickers, watch them, open a finished job ----------
+
+const ACTIVE = new Set(["queued", "running"]);
+let jobsTimer = null;
+let openJobId = null;
+
+async function loadJobs() {
+  const jobs = await api("/api/news/jobs");
+  $("jobs-body").innerHTML = jobs.length
+    ? jobs.map((j) => {
+        const detail = j.status === "done"
+          ? `<button class="link" data-job="${esc(j.job_id)}">View data</button>`
+          : "";
+        const counts = j.progress?.counts?.done;
+        const status = ACTIVE.has(j.status) && j.progress
+          ? `${j.status} (${esc(j.progress.stage)}${counts != null ? `, ${counts} done` : ""})`
+          : esc(j.status) + (j.error ? ` – ${esc(j.error)}` : "");
+        return `<tr>
+          <td>${esc(j.symbol)}</td><td>${esc(j.requested_at)}</td>
+          <td class="status-${esc(j.status)}">${status}</td>
+          <td class="num">${j.article_count ?? "–"}</td><td>${detail}</td></tr>`;
+      }).join("")
+    : `<tr><td colspan="5" class="empty">No jobs yet. Queue some tickers to the left.</td></tr>`;
+
+  // Keep polling only while something is running; stop once everything has settled.
+  const anyActive = jobs.some((j) => ACTIVE.has(j.status));
+  if (anyActive && !jobsTimer) {
+    jobsTimer = setInterval(() => loadJobs().catch(() => {}), 3000);
+  } else if (!anyActive && jobsTimer) {
+    clearInterval(jobsTimer);
+    jobsTimer = null;
+    // A job just finished: refresh the per-ticker news view too.
+    loadNews(state.symbol).catch(() => {});
+  }
+}
+
+async function queueJobs(event) {
+  event.preventDefault();
+  const out = $("jobs-status");
+  out.textContent = "Queuing…";
+  try {
+    const { results } = await api("/api/news", {
+      method: "POST",
+      body: {
+        symbols: $("jobs-tickers").value,
+        days: Number($("jobs-days").value),
+        max_articles: Number($("jobs-max").value),
+        refresh: $("jobs-refresh").checked,
+      },
+    });
+    const ok = results.filter((r) => r.ok).map((r) => r.symbol);
+    const failed = results.filter((r) => !r.ok);
+    out.textContent = [
+      ok.length ? `Queued: ${ok.join(", ")}` : "",
+      ...failed.map((r) => `${r.symbol}: ${r.error}`),
+    ].filter(Boolean).join("\n");
+    if (ok.length) $("jobs-tickers").value = "";
+    await loadJobs();
+  } catch (err) {
+    out.textContent = err.message;
+  }
+}
+
+async function showJob(jobId) {
+  const box = $("job-detail");
+  box.textContent = "Loading…";
+  const r = await api(`/api/news/jobs/${encodeURIComponent(jobId)}/result`);
+  openJobId = jobId;
+  const skipped = (r.skipped || []).length
+    ? `<ul class="skipped">${r.skipped.map((x) => `<li>${esc(x.title || x.url)} – ${esc(x.reason)}</li>`).join("")}</ul>`
+    : "";
+  box.innerHTML = `
+    <h3>${esc(r.symbol)}: ${r.articles.length} article${r.articles.length === 1 ? "" : "s"}</h3>
+    <p class="meta">Generated ${esc(r.generated_at)}</p>
+    <p class="news-overview">${esc(r.overview)}</p>
+    ${r.articles.map(articleHtml).join("")}
+    ${skipped ? `<h4>Skipped</h4>${skipped}` : ""}`;
+}
+
 // ---------- Wiring ----------
 
 function initDates() {
@@ -342,6 +425,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("fetch-news").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
     try { await fetchNews(); } catch (err) { $("news-status").textContent = err.message; }
   }));
+  $("jobs-form").addEventListener("submit", queueJobs);
+  $("jobs-body").addEventListener("click", guard(async (e) => {
+    const id = e.target.closest("button[data-job]")?.dataset.job;
+    if (id) await showJob(id);
+  }));
   $("series").addEventListener("change", guard((e) => showSeries(e.target.value)));
   $("stored-body").addEventListener("click", guard(async (e) => {
     const symbol = e.target.closest("tr")?.dataset.symbol;
@@ -358,6 +446,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await loadIndicators();
     await loadWatchlist();
     await refreshStored();
+    await loadJobs();
   } catch (err) {
     setStatus(`Can't reach the backend. Is python backend/app.py running?\n${err.message}`, "error");
   }

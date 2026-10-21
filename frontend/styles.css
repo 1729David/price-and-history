@@ -130,6 +130,14 @@ td.empty { color: var(--ink-soft); padding: 1rem .6rem; }
 .badge.fresh { border: 1px solid var(--brass); color: var(--brass); }
 .badge.cached { border: 1px solid var(--ink-soft); color: var(--ink-soft); }
 
+#jobs-status { white-space: pre-line; }
+.check { display: flex; align-items: center; gap: .4rem; margin: .5rem 0; }
+.jobs td.status-failed, .jobs td.status-paused { color: var(--ink-soft); }
+.jobs button.link { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
+.job-detail { margin-top: 1rem; }
+.job-detail h3 { margin: 0 0 .25rem; }
+.job-detail .skipped { color: var(--ink-soft); font-size: .85rem; margin: .75rem 0 0; padding-left: 1.1rem; }
+
 .news-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 .news-overview { white-space: pre-wrap; margin: .5rem 0 1rem; }
 .news-article { padding: .75rem 0; border-top: 1px solid var(--rule); }

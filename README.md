@@ -68,6 +68,13 @@ updates rows instead of duplicating them. If the browser is closed mid-job, the 
 stores whatever finished meanwhile. Stored news is served even when the agent is offline. A job the agent
 pauses (for example Ollama is down) is reported with its error; resume it on the agent and fetch again.
 
+**News jobs.** The *News jobs* panel in the sidebar queues a job for one or more tickers at once (up to 20;
+days back, max articles and re-download are shared by the batch). Jobs run on the agent one at a time. The
+*News jobs* table lists every job with its status and progress and refreshes itself while any are running;
+**View data** opens what a finished job retrieved: its overview, the articles it kept and the ones it skipped
+(with the reason). Each job's full result is saved as the agent returned it, so a job's view stays the same
+even if a later job re-fetches the same article. Tickers the agent rejects are reported without stopping the rest.
+
 The agent only accepts stock tickers, so indicators like `^GSPC` are rejected with an error.
 
 ## API
@@ -82,6 +89,9 @@ The agent only accepts stock tickers, so indicators like `^GSPC` are rejected wi
 | POST | `/api/stocks/fetch` | `{start, end, symbols?}` (defaults to watchlist) |
 | GET | `/api/prices` | `?symbol=^GSPC&start=&end=` |
 | GET | `/api/stored` | |
+| POST | `/api/news` | `{symbols: "AAPL, MSFT", days?, max_articles?, refresh?}`; one job per ticker, returns per-ticker results |
+| GET | `/api/news/jobs` | every queued job, newest first, with status, progress and article count |
+| GET | `/api/news/jobs/<job_id>/result` | everything one finished job retrieved |
 | POST | `/api/news/<symbol>` | `{days?, max_articles?, refresh?}`; queues an agent job, returns `{job_id, status}` |
 | GET | `/api/news/jobs/<job_id>` | status and progress; stores the result once done |
 | GET | `/api/news/<symbol>` | stored overview and articles |
