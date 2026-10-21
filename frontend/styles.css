@@ -8,6 +8,10 @@
   --steel: #3a6186;
   --error: #9e3434;
   --ok: #3d6b4a;
+  /* News sentiment markers */
+  --pos: #3f8a4f;
+  --mixed: #d9a521;
+  --neg: #b23a3a;
   --font: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
@@ -114,6 +118,27 @@ button.primary:hover { background: #2b3947; }
   cursor: crosshair;
 }
 #chart:focus-visible { outline: 2px solid var(--steel); outline-offset: 2px; }
+#chart.on-marker { cursor: pointer; }
+
+/* Sentiment marks, matching the shapes drawn on the chart */
+.mark { display: inline-block; width: .7rem; height: .7rem; margin-right: .3rem; vertical-align: -.05rem; }
+.mark.positive { background: var(--pos); clip-path: polygon(50% 0, 100% 90%, 0 90%); }
+.mark.negative { background: var(--neg); clip-path: polygon(0 10%, 100% 10%, 50% 100%); }
+.mark.mixed { background: var(--mixed); border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(24 34 45 / .45); }
+.mark.none { border: 1.5px solid var(--ink-soft); border-radius: 50%; }
+
+.legend { margin: .5rem 0 0; font-size: .85rem; color: var(--ink-soft); display: flex; flex-wrap: wrap; gap: .25rem 1rem; align-items: center; }
+.legend[hidden] { display: none; }
+.hint-inline { font-size: .85rem; color: var(--ink-soft); }
+.chip-sentiment { white-space: nowrap; }
+
+.sentiment-edit { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin: .5rem 0 .75rem; }
+.se-title { font-weight: 500; font-size: .9rem; }
+.se-buttons { display: inline-flex; }
+.se-buttons button { border-radius: 0; margin-left: -1px; font-size: .85rem; padding: .3rem .65rem; }
+.se-buttons button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.se-buttons button:last-child { border-radius: 0 4px 4px 0; }
+.se-buttons button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); position: relative; }
 
 /* Reserve room for the detail so the page doesn't jump when a day is picked. */
 .point-detail { margin-top: .75rem; min-height: 4.75rem; }

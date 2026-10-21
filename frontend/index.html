@@ -73,6 +73,14 @@
 
       <canvas id="chart" height="360" tabindex="0"
         aria-label="Closing price chart. Click a day to see its prices, or use the arrow keys."></canvas>
+      <p id="chart-legend" class="legend" hidden>
+        News sentiment:
+        <span class="key"><i class="mark positive"></i>Positive</span>
+        <span class="key"><i class="mark mixed"></i>Mixed</span>
+        <span class="key"><i class="mark negative"></i>Negative</span>
+        <span class="key"><i class="mark none"></i>Not labeled</span>
+        <span class="hint-inline">Click a marker to open that job.</span>
+      </p>
       <div id="point-detail" class="point-detail" aria-live="polite"></div>
 
       <details class="fold stored">
@@ -106,7 +114,7 @@
         <h2 id="jobs-title" class="table-title">News jobs</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Ticker</th><th>Queued (UTC)</th><th>Status</th><th class="num">Articles</th><th></th></tr></thead>
+            <thead><tr><th>Ticker</th><th>Queued (UTC)</th><th>Status</th><th>Sentiment</th><th class="num">Articles</th><th></th></tr></thead>
             <tbody id="jobs-body"></tbody>
           </table>
         </div>

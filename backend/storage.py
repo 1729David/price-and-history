@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS news_jobs (
     status       TEXT NOT NULL,
     error        TEXT,
     requested_at TEXT NOT NULL DEFAULT (datetime('now')),
-    stored       INTEGER NOT NULL DEFAULT 0
+    stored       INTEGER NOT NULL DEFAULT 0,
+    -- The user's own sentiment label; when NULL the agent's label (in the result) applies.
+    sentiment_override TEXT
 );
 
 CREATE TABLE IF NOT EXISTS news_overviews (
@@ -95,6 +97,10 @@ def connect():
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # Databases created before sentiment labels existed lack the column.
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(news_jobs)")}
+        if "sentiment_override" not in columns:
+            conn.execute("ALTER TABLE news_jobs ADD COLUMN sentiment_override TEXT")
 
 
 def missing_ranges(symbol: str, source: str, start: date, end: date) -> list[tuple[date, date]]:
@@ -299,21 +305,59 @@ def get_job_result(job_id: str) -> dict | None:
     return json.loads(row["result_json"]) if row else None
 
 
+SENTIMENTS = ("positive", "mixed", "negative")
+
+
+def _with_sentiment(job: dict) -> dict:
+    """Replace the raw override and agent label with the label that applies and where it came from."""
+    override = job.pop("sentiment_override", None)
+    agent = job.pop("agent_sentiment", None)
+    agent = agent if agent in SENTIMENTS else None
+    job["agent_sentiment"] = agent
+    job["sentiment"] = override or agent
+    job["sentiment_source"] = "user" if override else "agent" if agent else None
+    return job
+
+
 def list_news_jobs() -> list[dict]:
     """Every job we have queued, newest first, with how many articles a finished one kept."""
     with connect() as conn:
-        return [dict(r) for r in conn.execute(
+        return [_with_sentiment(dict(r)) for r in conn.execute(
             """
             SELECT j.job_id, j.symbol, j.status, j.error, j.requested_at, j.stored,
                    CASE WHEN j.stored = 0 THEN NULL
                         WHEN r.result_json IS NOT NULL
                             THEN json_array_length(json_extract(r.result_json, '$.articles'))
                         ELSE (SELECT COUNT(*) FROM news_articles a WHERE a.job_id = j.job_id)
-                   END AS article_count
+                   END AS article_count,
+                   j.sentiment_override,
+                   json_extract(r.result_json, '$.sentiment') AS agent_sentiment
             FROM news_jobs j LEFT JOIN news_job_results r ON r.job_id = j.job_id
             ORDER BY j.requested_at DESC, j.rowid DESC
             """
         )]
+
+
+def job_sentiment(job_id: str) -> dict | None:
+    """The sentiment fields of one job, as list_news_jobs reports them."""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT j.sentiment_override, json_extract(r.result_json, '$.sentiment') AS agent_sentiment
+            FROM news_jobs j LEFT JOIN news_job_results r ON r.job_id = j.job_id
+            WHERE j.job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+    return _with_sentiment(dict(row)) if row else None
+
+
+def set_sentiment_override(job_id: str, sentiment: str | None) -> None:
+    """Set the user's label for a job; None goes back to the agent's."""
+    if sentiment is not None and sentiment not in SENTIMENTS:
+        raise ValueError(f"Sentiment must be one of {', '.join(SENTIMENTS)}, or null to use the agent's.")
+    with connect() as conn:
+        conn.execute("UPDATE news_jobs SET sentiment_override = ? WHERE job_id = ?", (sentiment, job_id))
 
 
 def get_news(symbol: str) -> dict:

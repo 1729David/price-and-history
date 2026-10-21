@@ -255,7 +255,20 @@ def news_job_result(job_id):
         # Stored before full results were kept; the agent still has it.
         result = agent_client.get_job(job_id)["result"]
         storage.save_job_result(job_id, result)
-    return jsonify({"job_id": job_id, "symbol": job["symbol"], **result})
+    # The result's own "sentiment" is the agent's; report the label that applies instead.
+    return jsonify({"job_id": job_id, "symbol": job["symbol"], **result, **storage.job_sentiment(job_id)})
+
+
+@app.put("/api/news/jobs/<job_id>/sentiment")
+def set_news_sentiment(job_id):
+    """Relabel a job's sentiment. {"sentiment": null} goes back to the agent's label."""
+    if storage.get_news_job(job_id) is None:
+        return jsonify({"error": "Unknown news job."}), 404
+    payload = request.get_json(silent=True) or {}
+    if "sentiment" not in payload:
+        raise ValueError('Send {"sentiment": "positive" | "mixed" | "negative" | null}.')
+    storage.set_sentiment_override(job_id, payload["sentiment"])
+    return jsonify({"job_id": job_id, **storage.job_sentiment(job_id)})
 
 
 @app.get("/api/news/jobs/<job_id>")

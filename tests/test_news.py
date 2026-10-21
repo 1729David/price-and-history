@@ -5,13 +5,14 @@ import agent_client
 import storage
 
 
-def make_job(status="done", job_id="job1", articles=None, error=None):
+def make_job(status="done", job_id="job1", articles=None, error=None, sentiment=None):
     job = {"id": job_id, "status": status, "error": error, "progress": {"stage": status, "counts": {}}}
     if status == "done":
         job["result"] = {
             "ticker": "AAPL",
             "generated_at": "2026-10-12T10:00:00Z",
             "overview": "Apple had a quiet month.",
+            **({"sentiment": sentiment} if sentiment else {}),
             "articles": articles if articles is not None else [{
                 "article_id": 1, "title": "iPhone sales", "source": "Reuters",
                 "url": "https://example.com/a", "published_at": "2026-10-10",
@@ -294,3 +295,67 @@ def test_job_stored_before_snapshots_existed_is_recovered_from_the_agent(client,
     body = client.get("/api/news/jobs/job-AAPL/result").get_json()
     assert body["overview"] == "Apple had a quiet month."
     assert storage.get_job_result("job-AAPL") is not None  # saved for next time
+
+
+# ---------- sentiment: the agent's label, which the user can change ----------
+
+def test_job_list_and_result_carry_the_agents_sentiment(client, multi_agent):
+    client.post("/api/news", json={"symbols": "AAPL, MSFT"})
+    finish(multi_agent, "AAPL", sentiment="negative")
+    finish(multi_agent, "MSFT")  # a result from before the agent labeled sentiment
+
+    jobs = {j["symbol"]: j for j in client.get("/api/news/jobs").get_json()}
+    assert (jobs["AAPL"]["sentiment"], jobs["AAPL"]["sentiment_source"]) == ("negative", "agent")
+    assert (jobs["MSFT"]["sentiment"], jobs["MSFT"]["sentiment_source"]) == (None, None)
+    assert "sentiment_override" not in jobs["AAPL"]
+
+    body = client.get("/api/news/jobs/job-AAPL/result").get_json()
+    assert (body["sentiment"], body["agent_sentiment"], body["sentiment_source"]) == ("negative", "negative", "agent")
+
+
+def test_user_can_relabel_a_job_and_go_back_to_the_agents_label(client, multi_agent):
+    client.post("/api/news", json={"symbols": "AAPL"})
+    finish(multi_agent, "AAPL", sentiment="negative")
+    client.get("/api/news/jobs")
+
+    resp = client.put("/api/news/jobs/job-AAPL/sentiment", json={"sentiment": "mixed"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"job_id": "job-AAPL", "sentiment": "mixed",
+                               "agent_sentiment": "negative", "sentiment_source": "user"}
+    listed = client.get("/api/news/jobs").get_json()[0]
+    assert (listed["sentiment"], listed["sentiment_source"]) == ("mixed", "user")
+    assert client.get("/api/news/jobs/job-AAPL/result").get_json()["sentiment"] == "mixed"
+
+    reset = client.put("/api/news/jobs/job-AAPL/sentiment", json={"sentiment": None}).get_json()
+    assert (reset["sentiment"], reset["sentiment_source"]) == ("negative", "agent")
+
+
+def test_relabel_validates_input(client, multi_agent):
+    client.post("/api/news", json={"symbols": "AAPL"})
+    url = "/api/news/jobs/job-AAPL/sentiment"
+    assert client.put(url, json={"sentiment": "bullish"}).status_code == 400
+    assert client.put(url, json={}).status_code == 400
+    assert client.put("/api/news/jobs/nope/sentiment", json={"sentiment": "mixed"}).status_code == 404
+
+
+def test_user_label_works_for_a_job_the_agent_never_labeled(client, multi_agent):
+    client.post("/api/news", json={"symbols": "AAPL"})
+    finish(multi_agent, "AAPL")
+    client.get("/api/news/jobs")
+    body = client.put("/api/news/jobs/job-AAPL/sentiment", json={"sentiment": "positive"}).get_json()
+    assert (body["sentiment"], body["agent_sentiment"], body["sentiment_source"]) == ("positive", None, "user")
+
+
+def test_database_from_before_sentiment_labels_is_upgraded(tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("""CREATE TABLE news_jobs (job_id TEXT PRIMARY KEY, symbol TEXT NOT NULL,
+            status TEXT NOT NULL, error TEXT, requested_at TEXT NOT NULL DEFAULT (datetime('now')),
+            stored INTEGER NOT NULL DEFAULT 0)""")
+        conn.execute("INSERT INTO news_jobs (job_id, symbol, status) VALUES ('old', 'AAPL', 'queued')")
+    monkeypatch.setattr(storage, "DB_PATH", path)
+    storage.init_db()
+    storage.init_db()  # running again is harmless
+    storage.set_sentiment_override("old", "mixed")
+    assert storage.list_news_jobs()[0]["sentiment"] == "mixed"

@@ -7,6 +7,7 @@ const state = {
   rows: [],         // rows for the series currently shown
   symbol: null,
   selected: null,   // date of the day pinned on the chart
+  jobs: [],         // every news job, as /api/news/jobs lists them
   freshDates: new Map(), // symbol -> Set of dates fetched fresh in the last fetch of that symbol
 };
 
@@ -40,6 +41,21 @@ const fmtPrice = (v) => v == null ? "–" : v.toLocaleString(undefined, { minimu
 const fmtVolume = (v) => v == null ? "–" : Math.round(v).toLocaleString();
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const isoDate = (d) => d.toISOString().slice(0, 10);
+
+// News sentiment: colour plus a shape per label, so it doesn't rely on colour alone.
+const SENTIMENT = {
+  positive: { label: "Positive", color: "--pos", shape: "up" },
+  mixed: { label: "Mixed", color: "--mixed", shape: "circle" },
+  negative: { label: "Negative", color: "--neg", shape: "down" },
+};
+const sentimentLabel = (s) => SENTIMENT[s]?.label ?? "Not labeled";
+const sentimentChip = (s) => `<span class="chip-sentiment"><i class="mark ${s || "none"}"></i>${sentimentLabel(s)}</span>`;
+
+// requested_at is UTC ("2026-10-21 03:00:11"); a job belongs to the local day it was run.
+function localDay(utc) {
+  const d = new Date(utc.replace(" ", "T") + "Z");
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 // Just enough Markdown for the agent's overviews: headings, bold/italic/code, nested lists, paragraphs.
 // Each line is escaped before any tags are added, so the only HTML in the output is ours.
@@ -265,6 +281,52 @@ function renderTable() {
 // Geometry of the last chart drawn, so mouse positions can be mapped back to days.
 let chart = null;
 let hoverIndex = null;
+let hoverJob = null; // job_id of the news marker under the mouse
+
+// One marker per finished news job for this series, on the last trading day on or
+// before the local day it ran. Jobs from before the first stored day are left out.
+function newsMarkers(points) {
+  const perDay = new Map();
+  return state.jobs
+    .filter((j) => j.symbol === state.symbol && j.status === "done")
+    .sort((a, b) => a.requested_at.localeCompare(b.requested_at))
+    .flatMap((job) => {
+      const day = localDay(job.requested_at);
+      let i = points.length - 1;
+      while (i >= 0 && points[i].date > day) i--;
+      if (i < 0) return [];
+      const stack = perDay.get(i) || 0; // several jobs on one day sit side by side
+      perDay.set(i, stack + 1);
+      return [{ job, day, i, stack }];
+    });
+}
+
+function drawSentimentMark(ctx, sentiment, cx, cy, r, color) {
+  const style = SENTIMENT[sentiment];
+  ctx.beginPath();
+  if (style?.shape === "up") {
+    ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy + r * 0.8); ctx.lineTo(cx - r, cy + r * 0.8); ctx.closePath();
+  } else if (style?.shape === "down") {
+    ctx.moveTo(cx, cy + r); ctx.lineTo(cx + r, cy - r * 0.8); ctx.lineTo(cx - r, cy - r * 0.8); ctx.closePath();
+  } else {
+    ctx.arc(cx, cy, r * 0.8, 0, Math.PI * 2);
+  }
+  if (style) {
+    ctx.fillStyle = color(style.color);
+    ctx.fill();
+    ctx.strokeStyle = color("--ink");
+    ctx.globalAlpha = 0.45; // a dark edge keeps the yellow visible on the light background
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = color("--surface");
+    ctx.fill();
+    ctx.strokeStyle = color("--ink-soft");
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
 
 function drawChart() {
   chart = null;
@@ -283,13 +345,16 @@ function drawChart() {
   ctx.font = `12px ${color("--font")}`;
 
   const points = state.rows.filter((r) => r.close != null);
+  const markers = points.length < 2 ? [] : newsMarkers(points);
+  $("chart-legend").hidden = !markers.length;
   if (points.length < 2) {
     ctx.fillStyle = color("--ink-soft");
     ctx.fillText("Fetch some data, then pick a series to chart it.", 20, height / 2);
     return;
   }
 
-  const pad = { top: 20, right: 16, bottom: 28, left: 64 };
+  // With news markers, a strip under the plot holds them, above the date labels.
+  const pad = { top: 20, right: 16, bottom: markers.length ? 48 : 28, left: 64 };
   const w = width - pad.left - pad.right;
   const h = height - pad.top - pad.bottom;
   const closes = points.map((p) => p.close);
@@ -329,7 +394,19 @@ function drawChart() {
   points.forEach((p, i) => (i ? ctx.lineTo(x(i), y(p.close)) : ctx.moveTo(x(i), y(p.close))));
   ctx.stroke();
 
-  chart = { points, pad, w, width, height, x, y };
+  const laneY = height - pad.bottom + 14;
+  const placed = markers.map((m) => ({ ...m, cx: x(m.i) - m.stack * 14, cy: laneY }));
+  chart = { points, pad, w, width, height, x, y, markers: placed };
+
+  const label = (text, atX) => {
+    const tw = ctx.measureText(text).width + 12;
+    const lx = Math.min(Math.max(atX - tw / 2, pad.left), width - pad.right - tw);
+    ctx.fillStyle = color("--ink");
+    ctx.fillRect(lx, pad.top - 14, tw, 20);
+    ctx.fillStyle = color("--surface");
+    ctx.textAlign = "left";
+    ctx.fillText(text, lx + 6, pad.top);
+  };
 
   const marker = (i, ink, dashed) => {
     const xx = Math.round(x(i)) + 0.5;
@@ -348,19 +425,28 @@ function drawChart() {
   const selectedIndex = points.findIndex((p) => p.date === state.selected);
   if (selectedIndex >= 0) marker(selectedIndex, color("--ink"), false);
 
-  if (hoverIndex != null && hoverIndex < points.length && hoverIndex !== selectedIndex) {
-    marker(hoverIndex, color("--ink-soft"), true);
-    // Small date / close label at the top, kept inside the plot area.
-    const p = points[hoverIndex];
-    const text = `${p.date}  ${fmtPrice(p.close)}`;
-    const tw = ctx.measureText(text).width + 12;
-    const lx = Math.min(Math.max(x(hoverIndex) - tw / 2, pad.left), width - pad.right - tw);
-    ctx.fillStyle = color("--ink");
-    ctx.fillRect(lx, pad.top - 14, tw, 20);
-    ctx.fillStyle = color("--surface");
-    ctx.textAlign = "left";
-    ctx.fillText(text, lx + 6, pad.top);
+  const hovered = placed.find((m) => m.job.job_id === hoverJob);
+  for (const m of placed) {
+    drawSentimentMark(ctx, m.job.sentiment, m.cx, m.cy, m === hovered ? 8 : 6, color);
   }
+
+  if (hovered) {
+    if (hovered.i !== selectedIndex) marker(hovered.i, color("--ink-soft"), true);
+    const who = hovered.job.sentiment_source === "user" ? " (your label)" : "";
+    label(`News ${hovered.day} · ${sentimentLabel(hovered.job.sentiment)}${who}`, hovered.cx);
+  } else if (hoverIndex != null && hoverIndex < points.length && hoverIndex !== selectedIndex) {
+    marker(hoverIndex, color("--ink-soft"), true);
+    const p = points[hoverIndex];
+    label(`${p.date}  ${fmtPrice(p.close)}`, x(hoverIndex));
+  }
+}
+
+function markerAt(event) {
+  if (!chart) return null;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const mx = event.clientX - rect.left, my = event.clientY - rect.top;
+  // Topmost (last drawn) first, with a little slack around the 6px marks.
+  return [...chart.markers].reverse().find((m) => Math.hypot(m.cx - mx, m.cy - my) <= 9) || null;
 }
 
 function indexAt(event) {
@@ -410,14 +496,22 @@ function renderPointDetail() {
 function wireChart() {
   const canvas = $("chart");
   canvas.addEventListener("mousemove", (e) => {
+    const job = markerAt(e)?.job.job_id ?? null;
     const i = indexAt(e);
-    if (i !== hoverIndex) { hoverIndex = i; drawChart(); }
+    canvas.classList.toggle("on-marker", job != null);
+    if (i !== hoverIndex || job !== hoverJob) { hoverIndex = i; hoverJob = job; drawChart(); }
   });
-  canvas.addEventListener("mouseleave", () => { hoverIndex = null; drawChart(); });
-  canvas.addEventListener("click", (e) => {
+  canvas.addEventListener("mouseleave", () => { hoverIndex = null; hoverJob = null; drawChart(); });
+  canvas.addEventListener("click", guard(async (e) => {
+    const m = markerAt(e);
+    if (m) {
+      await showJob(m.job.job_id);
+      $("job-detail").scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
     const i = indexAt(e);
     if (i != null) selectDate(chart.points[i].date);
-  });
+  }));
   canvas.addEventListener("keydown", (e) => {
     if (!chart) return;
     const points = chart.points;
@@ -501,6 +595,8 @@ let openJobId = null;
 
 async function loadJobs() {
   const jobs = await api("/api/news/jobs");
+  state.jobs = jobs;
+  drawChart(); // markers follow the job list
   $("jobs-body").innerHTML = jobs.length
     ? jobs.map((j) => {
         const detail = j.status === "done"
@@ -513,9 +609,10 @@ async function loadJobs() {
         return `<tr>
           <td>${esc(j.symbol)}</td><td>${esc(j.requested_at)}</td>
           <td class="status-${esc(j.status)}">${status}</td>
+          <td>${j.status === "done" ? sentimentChip(j.sentiment) : ""}</td>
           <td class="num">${j.article_count ?? "–"}</td><td>${detail}</td></tr>`;
       }).join("")
-    : `<tr><td colspan="5" class="empty">No jobs yet. Queue some tickers to the left.</td></tr>`;
+    : `<tr><td colspan="6" class="empty">No jobs yet. Queue some tickers to the left.</td></tr>`;
 
   // Keep polling only while something is running; stop once everything has settled.
   const anyActive = jobs.some((j) => ACTIVE.has(j.status));
@@ -567,9 +664,34 @@ async function showJob(jobId) {
   box.innerHTML = `
     <h3>${esc(r.symbol)}: ${r.articles.length} article${r.articles.length === 1 ? "" : "s"}</h3>
     <p class="meta">Generated ${esc(r.generated_at)}</p>
+    <div id="sentiment-edit" class="sentiment-edit">${sentimentEditorHtml(r)}</div>
     <div class="news-overview">${markdownHtml(r.overview)}</div>
     ${r.articles.map(articleHtml).join("")}
     ${skipped ? `<h4>Skipped</h4>${skipped}` : ""}`;
+}
+
+function sentimentEditorHtml(s) {
+  const buttons = Object.entries(SENTIMENT).map(([key, { label }]) => `
+    <button type="button" data-sentiment="${key}" aria-pressed="${s.sentiment === key}">
+      <i class="mark ${key}"></i>${label}</button>`).join("");
+  const source = s.sentiment_source === "user"
+    ? `Your label. <button type="button" class="link" data-sentiment="">Use the agent's${
+        s.agent_sentiment ? ` (${sentimentLabel(s.agent_sentiment)})` : ""}</button>`
+    : s.sentiment_source === "agent" ? "Set by the agent. Pick another to change it."
+    : "The agent didn't label this job. Pick one.";
+  return `
+    <span class="se-title" id="se-title">Sentiment</span>
+    <div class="se-buttons" role="group" aria-labelledby="se-title">${buttons}</div>
+    <span class="hint-inline">${source}</span>`;
+}
+
+async function setSentiment(jobId, sentiment) {
+  const updated = await api(`/api/news/jobs/${encodeURIComponent(jobId)}/sentiment`, {
+    method: "PUT",
+    body: { sentiment: sentiment || null },
+  });
+  if (openJobId === jobId) $("sentiment-edit").innerHTML = sentimentEditorHtml(updated);
+  await loadJobs(); // refreshes the table chip and the chart marker
 }
 
 // ---------- Wiring ----------
@@ -603,6 +725,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     const id = e.target.closest("button[data-job]")?.dataset.job;
     if (id) await showJob(id);
   }));
+  $("job-detail").addEventListener("click", (e) => {
+    const button = e.target.closest("button[data-sentiment]");
+    if (!button || !openJobId) return;
+    withBusy(button, () => setSentiment(openJobId, button.dataset.sentiment)
+      .catch((err) => { $("job-detail").querySelector(".hint-inline").textContent = err.message; }));
+  });
   $("series").addEventListener("change", guard((e) => showSeries(e.target.value)));
   $("stored-body").addEventListener("click", guard(async (e) => {
     const symbol = e.target.closest("tr")?.dataset.symbol;
