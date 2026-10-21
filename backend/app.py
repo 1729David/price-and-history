@@ -179,18 +179,21 @@ def _sync_news_job(job: dict) -> dict:
     return remote
 
 
-def _sync_pending(symbol: str | None = None) -> None:
+def _sync_pending(symbol: str | None = None) -> dict[str, dict]:
+    """Refresh unfinished jobs from the agent. Returns each one's latest agent view by job id."""
+    seen = {}
     for job in storage.pending_news_jobs(symbol):
         try:
-            _sync_news_job(job)
+            seen[job["job_id"]] = _sync_news_job(job)
         except agent_client.AgentError:
             pass  # agent offline: stored data is still served, jobs are retried next time
+    return seen
 
 
-@app.post("/api/news/<symbol>")
-def start_news(symbol):
-    symbol = _clean_ticker(symbol)
-    payload = request.get_json(silent=True) or {}
+MAX_TICKERS_PER_REQUEST = 20
+
+
+def _queue_news(symbol: str, payload: dict) -> dict:
     job = agent_client.start_news_job(
         symbol,
         days=int(payload.get("days", 30)),
@@ -198,7 +201,61 @@ def start_news(symbol):
         refresh=bool(payload.get("refresh", False)),
     )
     storage.record_news_job(job["id"], symbol, job["status"])
-    return jsonify({"job_id": job["id"], "status": job["status"]}), 202
+    return {"symbol": symbol, "job_id": job["id"], "status": job["status"]}
+
+
+@app.post("/api/news/<symbol>")
+def start_news(symbol):
+    symbol = _clean_ticker(symbol)
+    queued = _queue_news(symbol, request.get_json(silent=True) or {})
+    return jsonify({"job_id": queued["job_id"], "status": queued["status"]}), 202
+
+
+@app.post("/api/news")
+def start_news_batch():
+    """Queue one job per ticker. A ticker the agent rejects is reported without failing the rest."""
+    payload = request.get_json(silent=True) or {}
+    raw = payload.get("symbols", "")
+    parts = raw if isinstance(raw, list) else re.split(r"[\s,;]+", raw)
+    symbols = list(dict.fromkeys(_clean_ticker(p) for p in parts if p.strip()))
+    if not symbols:
+        raise ValueError("Enter at least one ticker.")
+    if len(symbols) > MAX_TICKERS_PER_REQUEST:
+        raise ValueError(f"Queue at most {MAX_TICKERS_PER_REQUEST} tickers at a time.")
+
+    results = []
+    for symbol in symbols:
+        try:
+            results.append({"ok": True, **_queue_news(symbol, payload)})
+        except agent_client.AgentError as exc:
+            results.append({"ok": False, "symbol": symbol, "error": str(exc)})
+    return jsonify({"results": results}), 202
+
+
+@app.get("/api/news/jobs")
+def list_news_jobs():
+    """All queued jobs, newest first. Unfinished ones are refreshed (and stored if done) first."""
+    live = _sync_pending()
+    jobs = storage.list_news_jobs()
+    for job in jobs:
+        job["progress"] = live.get(job["job_id"], {}).get("progress")
+    return jsonify(jobs)
+
+
+@app.get("/api/news/jobs/<job_id>/result")
+def news_job_result(job_id):
+    """Everything one finished job retrieved: overview, kept articles and skipped ones."""
+    job = storage.get_news_job(job_id)
+    if job is None:
+        return jsonify({"error": "Unknown news job."}), 404
+    if not job["stored"]:
+        return jsonify({"error": "This job hasn't finished yet."}), 409
+    result = storage.get_job_result(job_id)
+    if result is None:
+        # Stored before full results were kept; the agent still has it.
+        result = agent_client.get_job(job_id)["result"]
+        storage.save_job_result(job_id, result)
+    return jsonify({"job_id": job_id, "symbol": job["symbol"], **result})
 
 
 @app.get("/api/news/jobs/<job_id>")

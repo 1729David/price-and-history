@@ -44,6 +44,21 @@
         <button id="fetch-stocks" class="primary">Fetch watchlist prices</button>
       </section>
 
+      <section class="panel">
+        <h2>News jobs</h2>
+        <form id="jobs-form" novalidate>
+          <label for="jobs-tickers">Tickers</label>
+          <input id="jobs-tickers" placeholder="AAPL, MSFT, NVDA" autocomplete="off">
+          <div class="field-row">
+            <label>Days back <input type="number" id="jobs-days" value="30" min="1" max="90"></label>
+            <label>Max articles <input type="number" id="jobs-max" value="15" min="1" max="30"></label>
+          </div>
+          <label class="check"><input type="checkbox" id="jobs-refresh"> Download articles again</label>
+          <button type="submit" class="primary">Queue jobs</button>
+        </form>
+        <p class="hint" id="jobs-status" role="status" aria-live="polite"></p>
+      </section>
+
       <p id="status" class="status" role="status" aria-live="polite"></p>
     </aside>
 
@@ -81,6 +96,17 @@
         </div>
         <p class="hint" id="news-status" role="status" aria-live="polite"></p>
         <div id="news-body"></div>
+      </section>
+
+      <section class="jobs" aria-labelledby="jobs-title">
+        <h2 id="jobs-title" class="table-title">News jobs</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Ticker</th><th>Queued (UTC)</th><th>Status</th><th class="num">Articles</th><th></th></tr></thead>
+            <tbody id="jobs-body"></tbody>
+          </table>
+        </div>
+        <div id="job-detail" class="job-detail" aria-live="polite"></div>
       </section>
     </section>
   </main>
