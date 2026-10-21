@@ -71,9 +71,19 @@
         <div class="latest" id="latest"></div>
       </div>
 
-      <canvas id="chart" height="360" aria-label="Closing price chart"></canvas>
+      <canvas id="chart" height="360" tabindex="0"
+        aria-label="Closing price chart. Click a day to see its prices, or use the arrow keys."></canvas>
+      <p id="chart-legend" class="legend" hidden>
+        News sentiment:
+        <span class="key"><i class="mark positive"></i>Positive</span>
+        <span class="key"><i class="mark mixed"></i>Mixed</span>
+        <span class="key"><i class="mark negative"></i>Negative</span>
+        <span class="key"><i class="mark none"></i>Not labeled</span>
+        <span class="hint-inline">Click a marker to open that job.</span>
+      </p>
+      <div id="point-detail" class="point-detail" aria-live="polite"></div>
 
-      <details class="stored">
+      <details class="fold stored">
         <summary>Everything stored</summary>
         <table>
           <thead><tr><th>Symbol</th><th>Source</th><th class="num">Days</th><th>First</th><th>Last</th></tr></thead>
@@ -81,13 +91,15 @@
         </table>
       </details>
 
-      <h2 class="table-title">Most recent days</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Source</th><th>Date</th><th class="num">Open</th><th class="num">High</th><th class="num">Low</th><th class="num">Close</th><th class="num">Volume</th></tr></thead>
-          <tbody id="rows-body"></tbody>
-        </table>
-      </div>
+      <details class="fold recent">
+        <summary>Most recent days</summary>
+        <div class="table-wrap">
+          <table id="rows-table">
+            <thead><tr><th>Source</th><th>Date</th><th class="num">Open</th><th class="num">High</th><th class="num">Low</th><th class="num">Close</th><th class="num">Volume</th></tr></thead>
+            <tbody id="rows-body"></tbody>
+          </table>
+        </div>
+      </details>
 
       <section class="news" aria-labelledby="news-title">
         <div class="news-head">
@@ -102,7 +114,7 @@
         <h2 id="jobs-title" class="table-title">News jobs</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Ticker</th><th>Queued (UTC)</th><th>Status</th><th class="num">Articles</th><th></th></tr></thead>
+            <thead><tr><th>Ticker</th><th>Queued (UTC)</th><th>Status</th><th>Sentiment</th><th class="num">Articles</th><th></th></tr></thead>
             <tbody id="jobs-body"></tbody>
           </table>
         </div>
